@@ -12,52 +12,65 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import urllib.request
+
+# --- FUNÇÃO DE BUSCA DE COORDENADAS ---
+
+def get_observatory_coords(iau_code):
+    """
+    Busca as coordenadas de um observatório na lista oficial do MPC.
+    """
+    mpc_url = "https://www.minorplanetcenter.net/iau/lists/ObsCodes.html"
+    if not isinstance(iau_code, str) or len(iau_code) != 3:
+        print("Erro: O código IAU deve ser uma string de 3 caracteres.")
+        return None
+    try:
+        print(f"Acessando a lista de observatórios do MPC para encontrar '{iau_code}'...")
+        with urllib.request.urlopen(mpc_url) as response:
+            html_content = response.read().decode('utf-8')
+        match = re.search(f"^{re.escape(iau_code)}.*", html_content, re.MULTILINE)
+        if not match:
+            print(f"Erro: Código de observatório '{iau_code}' não encontrado.")
+            return None
+        parts = match.group(0).split(maxsplit=4)
+        longitude_mpc = float(parts[1])
+        cos_lat = float(parts[2])
+        sin_lat = float(parts[3])
+        latitude = math.degrees(math.atan2(sin_lat, cos_lat))
+        longitude = longitude_mpc if longitude_mpc <= 180 else longitude_mpc - 360
+        print(f"Coordenadas encontradas: Lat {latitude:.4f}, Lon {longitude:.4f}")
+        return latitude, longitude
+    except Exception as e:
+        print(f"Ocorreu um erro durante a busca das coordenadas: {e}")
+        return None
 
 # --- FUNÇÕES DE COLETA E PROCESSAMENTO DE DADOS ---
 
 def fetch_data(url, observatorio_code):
-    """
-    Busca os dados de efemérides de uma URL do MPC usando Selenium.
-
-    Args:
-        url (str): A URL da página de confirmação (NEO ou PCC).
-        observatorio_code (str): O código IAU do observatório (ex: "Y28").
-
-    Returns:
-        str or None: O texto da página de resultados ou None se falhar.
-    """
-    print(f"Iniciando a busca de dados em {url}...")
+    print(f"Iniciando a busca de dados em {url} para o observatório {observatorio_code}...")
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    chrome_options.add_argument("--headless"); chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080"); chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     try:
         driver.get(url)
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH, "//input[@type='radio' and @name='W' and @value='a']"))).click()
         obs_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//input[@name='obscode']")))
-        obs_input.clear()
-        obs_input.send_keys(observatorio_code)
+        obs_input.clear(); obs_input.send_keys(observatorio_code)
         WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit']"))).click()
         time.sleep(5)
         if "No observers have reported any observations" in driver.page_source:
-            print("Nenhum objeto encontrado para os critérios de hoje.")
-            return None
+            print("Nenhum objeto encontrado para os critérios de hoje."); return None
         print("Dados de texto coletados com sucesso.")
         return driver.find_element(By.TAG_NAME, "body").text
     except Exception as e:
-        print(f"Ocorreu um erro durante a execução do Selenium: {e}")
-        return None
+        print(f"Ocorreu um erro durante a execução do Selenium: {e}"); return None
     finally:
         driver.quit()
 
 def process_data(page_text):
-    """Processa o texto bruto do MPC e o transforma em um dicionário de DataFrames."""
-    if not page_text:
-        return {}
-    lines = page_text.splitlines()
-    blocks = {}
+    if not page_text: return {}
+    lines = page_text.splitlines(); blocks = {}
     current_object, current_block = None, []
     for i, line in enumerate(lines):
         line_stripped = line.strip()
@@ -77,8 +90,7 @@ def process_data(page_text):
                 tokens = line.split()
                 if len(tokens) >= 20:
                     rows.append([" ".join(tokens[0:3]), tokens[3], " ".join(tokens[4:7]), " ".join(tokens[7:10]), tokens[10], tokens[11], tokens[12], tokens[13], tokens[14], tokens[15], tokens[16], tokens[17], tokens[18], tokens[19]])
-        if rows:
-            dataframes[obj] = pd.DataFrame(rows, columns=column_names)
+        if rows: dataframes[obj] = pd.DataFrame(rows, columns=column_names)
     print(f"Texto processado. {len(dataframes)} DataFrames criados.")
     return dataframes
 
@@ -127,22 +139,18 @@ def get_celestial_coords(body_name, jd):
 # --- FUNÇÕES DE ANÁLISE E PLOTAGEM ---
 
 def calcular_altitudes_para_objetos(dataframes, data_obs, lat_deg, lon_deg):
-    """Calcula as altitudes para uma lista de objetos ao longo de 24 horas."""
-    if not dataframes:
-        return {}, []
+    if not dataframes: return {}, []
     inicio_calculo_utc = datetime.strptime(f'{data_obs} 12:00:00', '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
     intervalo_de_tempo = [inicio_calculo_utc + timedelta(minutes=10 * i) for i in range(145)]
     resultados = {}
     for obj_nome, df_obj in dataframes.items():
         if not df_obj.empty:
             primeira_obs = df_obj.iloc[0]
-            ra_g = hms_para_graus(primeira_obs['R.A. (J2000)'])
-            dec_g = dms_para_graus(primeira_obs['Decl'])
+            ra_g = hms_para_graus(primeira_obs['R.A. (J2000)']); dec_g = dms_para_graus(primeira_obs['Decl'])
             resultados[obj_nome] = [calcular_altitude(ra_g, dec_g, lat_deg, lon_deg, t) for t in intervalo_de_tempo]
     return resultados, intervalo_de_tempo
 
 def filtrar_objetos_observaveis(resultados, alt_min, dur_min):
-    """Filtra os objetos que não cumprem os critérios de altitude e duração."""
     resultados_filtrados = {}
     intervalos_necessarios = dur_min // 10
     print(f"\nFiltrando objetos: devem estar acima de {alt_min}° por pelo menos {dur_min} min.")
@@ -157,7 +165,6 @@ def filtrar_objetos_observaveis(resultados, alt_min, dur_min):
     return resultados_filtrados
 
 def plotar_grafico_altitude(resultados, intervalo, config_obs, page_name, alt_min, dur_min):
-    """Cria e exibe um gráfico de visibilidade para os objetos fornecidos."""
     if not resultados:
         print("\nNenhum objeto para plotar após a filtragem."); return
 
