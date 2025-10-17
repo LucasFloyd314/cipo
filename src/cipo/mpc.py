@@ -14,7 +14,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 NEOCP_URL = "https://minorplanetcenter.net/iau/NEO/toconfirm_tabular.html"
 PCCP_URL = "https://minorplanetcenter.net/iau/NEO/pccp_tabular.html"
 
-def fetch_mpc_data(which='neocp'):
+def fetch_mpc_data(which='neocp', obscode='Y28'):
     """
     Fetch data from the MPC page using Selenium.
     Returns the page text or None on failure.
@@ -24,6 +24,9 @@ def fetch_mpc_data(which='neocp'):
     which : str
         Which dataset to fetch. Default is 'neocp'.
         Use 'pccp' for the Possible Comet Confirmation Page.
+
+    obscode : str
+        MPC Observatory code. Default is 'Y28'.
     
     Returns
     -------
@@ -54,7 +57,7 @@ def fetch_mpc_data(which='neocp'):
         driver.execute_script("arguments[0].click();", radio_button)
         obs_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//input[@name='obscode']")))
         obs_input.clear()
-        obs_input.send_keys("Y28")
+        obs_input.send_keys(obscode)
         submit_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit']")))
         driver.execute_script("arguments[0].click();", submit_button)
         time.sleep(5)
