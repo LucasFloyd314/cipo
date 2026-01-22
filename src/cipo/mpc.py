@@ -3,6 +3,10 @@
 import re
 import time
 import pandas as pd
+import requests
+import numpy as np
+from astropy.coordinates import EarthLocation
+import astropy.units as u
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -13,6 +17,42 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 NEOCP_URL = "https://minorplanetcenter.net/iau/NEO/toconfirm_tabular.html"
 PCCP_URL = "https://minorplanetcenter.net/iau/NEO/pccp_tabular.html"
+
+def get_observatory_location(iau_code):
+    r"""
+    Given an MPC observatory code, fetch the latitude, longitude and elevation
+    of the observatory from the MPC's official list.
+    
+    Parameters
+    ----------
+    iau_code : str
+        The 3-character MPC observatory code.
+    
+    Returns
+    -------
+    EarthLocation or None
+        The astropy.coordinates.EarthLocation of the observatory, or None if not found.
+    """
+    url_obs = "https://minorplanetcenter.net/iau/lists/ObsCodes.html"
+    # print(f"--- Downloading official MPC list to search for code {iau_code}... ---")
+    r = requests.get(url_obs)
+    r.raise_for_status()
+    
+
+    for line in r.text.split('\n'):
+        if line.startswith(iau_code):
+            parts = line.split()
+            if len(parts) >= 4:
+                long_deg = float(parts[1])
+                cos_phi = float(parts[2])
+                sin_phi = float(parts[3])
+                lat_rad = np.arctan2(sin_phi, cos_phi)
+                lat_deg = np.degrees(lat_rad)
+                # print(f"Observatory found: Lat {lat_deg:.4f}, Lon {long_deg:.4f}")
+                return EarthLocation(lat=lat_deg * u.deg, lon=long_deg * u.deg, height=0 * u.m)
+    
+    print(f"Code {iau_code} not found.")
+    return None
 
 def fetch_mpc_data(which='neocp', obscode='Y28'):
     """
