@@ -49,38 +49,47 @@ def get_observatory_coords(iau_code):
 def fetch_data(url, observatorio_code):
     print(f"Iniciando a busca de dados em {url} para o observatório {observatorio_code}...")
     chrome_options = Options()
-    chrome_options.add_argument("--headless"); chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080"); chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     try:
         driver.get(url)
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH, "//input[@type='radio' and @name='W' and @value='a']"))).click()
         obs_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//input[@name='obscode']")))
-        obs_input.clear(); obs_input.send_keys(observatorio_code)
+        obs_input.clear()
+        obs_input.send_keys(observatorio_code)
         WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit']"))).click()
         time.sleep(5)
         if "No observers have reported any observations" in driver.page_source:
-            print("Nenhum objeto encontrado para os critérios de hoje."); return None
+            print("Nenhum objeto encontrado para os critérios de hoje.")
+            return None
         print("Dados de texto coletados com sucesso.")
         return driver.find_element(By.TAG_NAME, "body").text
     except Exception as e:
-        print(f"Ocorreu um erro durante a execução do Selenium: {e}"); return None
+        print(f"Ocorreu um erro durante a execução do Selenium: {e}") 
+        return None
     finally:
         driver.quit()
 
 def process_data(page_text):
-    if not page_text: return {}
-    lines = page_text.splitlines(); blocks = {}
+    if not page_text: 
+        return {}
+    lines = page_text.splitlines() 
+    blocks = {}
     current_object, current_block = None, []
     for i, line in enumerate(lines):
         line_stripped = line.strip()
         if line_stripped and (i + 1 < len(lines)) and ("Get the observations" in lines[i+1]):
-            if current_object: blocks[current_object] = current_block
+            if current_object: 
+                blocks[current_object] = current_block
             current_object, current_block = line_stripped, []
             continue
         if current_object and "Get the observations" not in line_stripped and line_stripped:
             current_block.append(line_stripped)
-    if current_object: blocks[current_object] = current_block
+    if current_object: 
+        blocks[current_object] = current_block
     column_names = ["Date", "UT", "R.A. (J2000)", "Decl", "Elong", "V", 'Motion min', 'Motion PA', "Object Azi", "Object Alt", "Sun Alt", "Moon Phase", "Moon Dist", "Moon Alt"]
     dataframes = {}
     for obj, block_lines in blocks.items():
@@ -90,47 +99,60 @@ def process_data(page_text):
                 tokens = line.split()
                 if len(tokens) >= 20:
                     rows.append([" ".join(tokens[0:3]), tokens[3], " ".join(tokens[4:7]), " ".join(tokens[7:10]), tokens[10], tokens[11], tokens[12], tokens[13], tokens[14], tokens[15], tokens[16], tokens[17], tokens[18], tokens[19]])
-        if rows: dataframes[obj] = pd.DataFrame(rows, columns=column_names)
+        if rows: 
+            dataframes[obj] = pd.DataFrame(rows, columns=column_names)
     print(f"Texto processado. {len(dataframes)} DataFrames criados.")
     return dataframes
 
 # --- FUNÇÕES DE CÁLCULO ASTRONÔMICO ---
 
 def hms_para_graus(ra_str):
-    try: h, m, s = map(float, ra_str.split()); return (h + m/60 + s/3600) * 15
-    except: return None
+    try:
+        h, m, s = map(float, ra_str.split())
+        return (h + m/60 + s/3600) * 15
+    except Exception:
+        return None
 
 def dms_para_graus(dec_str):
     try:
         sinal = -1 if dec_str.strip().startswith('-') else 1
         d, m, s = map(float, dec_str.replace('-', '').replace('+', '').split())
         return sinal * (abs(d) + m/60 + s/3600)
-    except: return None
+    except Exception:
+        return None
 
-def calcular_tempo_sideral_local(utc_dt, lon_deg):
-    jd = utc_dt.timestamp() / 86400.0 + 2440587.5; d = jd - 2451545.0
+def calcular_tempo_suvideral_local(utc_dt, lon_deg):
+    jd = utc_dt.timestamp() / 86400.0 + 2440587.5 
+    d = jd - 2451545.0
     gmst = 18.697374558 + 24.06570982441908 * d
     return (gmst + (lon_deg / 15)) % 24
 
 def calcular_altitude(ra_deg, dec_deg, lat_deg, lon_deg, utc_dt):
-    if ra_deg is None or dec_deg is None: return None
+    if ra_deg is None or dec_deg is None: 
+        return None
     lat_rad, dec_rad = math.radians(lat_deg), math.radians(dec_deg)
-    lst_hours = calcular_tempo_sideral_local(utc_dt, lon_deg)
+    lst_hours = calcular_tempo_suvideral_local(utc_dt, lon_deg)
     ha_rad = math.radians((lst_hours - (ra_deg / 15)) * 15)
     sin_alt = (math.sin(dec_rad) * math.sin(lat_rad) + math.cos(dec_rad) * math.cos(lat_rad) * math.cos(ha_rad))
     return math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
 
 def get_celestial_coords(body_name, jd):
     n = jd - 2451545.0
-    eclob = 23.439 - 0.0000004 * n; eclob_rad = math.radians(eclob)
+    eclob = 23.439 - 0.0000004 * n 
+    eclob_rad = math.radians(eclob)
     if body_name == 'sun':
-        L = (280.460 + 0.9856474 * n) % 360; g = math.radians((357.528 + 0.9856003 * n) % 360)
-        eclon = L + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g); eclat = 0
+        L = (280.460 + 0.9856474 * n) % 360 
+        g = math.radians((357.528 + 0.9856003 * n) % 360)
+        eclon = L + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g) 
+        eclat = 0
     elif body_name == 'moon':
-        L = (218.32 + 13.176396 * n) % 360; M = (134.96 + 13.064993 * n) % 360
+        L = (218.32 + 13.176396 * n) % 360 
+        M = (134.96 + 13.064993 * n) % 360
         F = (93.27 + 13.229350 * n) % 360
-        eclon = L + 6.29 * math.sin(math.radians(M)); eclat = 5.13 * math.sin(math.radians(F))
-    else: return None, None
+        eclon = L + 6.29 * math.sin(math.radians(M)) 
+        eclat = 5.13 * math.sin(math.radians(F))
+    else: 
+        return None, None
     eclon_rad, eclat_rad = math.radians(eclon), math.radians(eclat)
     ra_rad = math.atan2(math.sin(eclon_rad) * math.cos(eclob_rad) - math.tan(eclat_rad) * math.sin(eclob_rad), math.cos(eclon_rad))
     dec_rad = math.asin(math.sin(eclat_rad) * math.cos(eclob_rad) + math.cos(eclat_rad) * math.sin(eclob_rad) * math.sin(eclon_rad))
@@ -139,14 +161,16 @@ def get_celestial_coords(body_name, jd):
 # --- FUNÇÕES DE ANÁLISE E PLOTAGEM ---
 
 def calcular_altitudes_para_objetos(dataframes, data_obs, lat_deg, lon_deg):
-    if not dataframes: return {}, []
+    if not dataframes: 
+        return {}, []
     inicio_calculo_utc = datetime.strptime(f'{data_obs} 12:00:00', '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
     intervalo_de_tempo = [inicio_calculo_utc + timedelta(minutes=10 * i) for i in range(145)]
     resultados = {}
     for obj_nome, df_obj in dataframes.items():
         if not df_obj.empty:
             primeira_obs = df_obj.iloc[0]
-            ra_g = hms_para_graus(primeira_obs['R.A. (J2000)']); dec_g = dms_para_graus(primeira_obs['Decl'])
+            ra_g = hms_para_graus(primeira_obs['R.A. (J2000)']) 
+            dec_g = dms_para_graus(primeira_obs['Decl'])
             resultados[obj_nome] = [calcular_altitude(ra_g, dec_g, lat_deg, lon_deg, t) for t in intervalo_de_tempo]
     return resultados, intervalo_de_tempo
 
@@ -157,16 +181,20 @@ def filtrar_objetos_observaveis(resultados, alt_min, dur_min):
     for nome_obj, altitudes in resultados.items():
         consecutivos = 0
         for alt in altitudes:
-            if alt is not None and alt >= alt_min: consecutivos += 1
-            else: consecutivos = 0
+            if alt is not None and alt >= alt_min:
+                consecutivos += 1
+            else:
+                consecutivos = 0
             if consecutivos >= intervalos_necessarios:
-                resultados_filtrados[nome_obj] = altitudes; break
+                resultados_filtrados[nome_obj] = altitudes 
+                break
     print(f"Resultado: {len(resultados_filtrados)} de {len(resultados)} objetos são observáveis.")
     return resultados_filtrados
 
 def plotar_grafico_altitude(resultados, intervalo, config_obs, page_name, alt_min, dur_min):
     if not resultados:
-        print("\nNenhum objeto para plotar após a filtragem."); return
+        print("\nNenhum objeto para plotar após a filtragem.") 
+        return
 
     print("\nGerando gráfico de visibilidade...")
     fig, ax = plt.subplots(figsize=(17, 9))
@@ -186,20 +214,26 @@ def plotar_grafico_altitude(resultados, intervalo, config_obs, page_name, alt_mi
         current_time = intervalo[0] - timedelta(hours=12) + timedelta(minutes=minute)
         alt_now = calcular_altitude(sun_ra, sun_dec, config_obs["lat"], config_obs["lon"], current_time)
         alt_prev = calcular_altitude(sun_ra, sun_dec, config_obs["lat"], config_obs["lon"], current_time - timedelta(minutes=5))
-        if alt_prev is not None and alt_prev > 0 and alt_now <= 0: sunset = current_time
-        if alt_prev is not None and alt_prev < 0 and alt_now >= 0: sunrise = current_time
+        if alt_prev is not None and alt_prev > 0 and alt_now <= 0: 
+            sunset = current_time
+        if alt_prev is not None and alt_prev < 0 and alt_now >= 0: 
+            sunrise = current_time
     
     if sunset and sunrise:
-        if sunrise < sunset: sunrise += timedelta(days=1)
+        if sunrise < sunset: 
+            sunrise += timedelta(days=1)
         ax.axvline(sunset, color='r', linestyle='--', label=f'Pôr do Sol ({sunset.strftime("%H:%M")})')
         ax.axvline(sunrise, color='orange', linestyle='--', label=f'Nascer do Sol ({sunrise.strftime("%H:%M")})')
         ax.axvspan(sunset, sunrise, alpha=0.1, color='gray')
 
-    ax.set_ylim(0, 90); ax.set_ylabel('Altitude (graus)', fontsize=14)
+    ax.set_ylim(0, 90) 
+    ax.set_ylabel('Altitude (graus)', fontsize=14)
     ax.set_xlabel(f'Horário (UTC) começando em {config_obs["data"]} 12:00', fontsize=14)
     ax.set_title(f'Visibilidade {page_name} (Objetos acima de {alt_min}° por {dur_min} min)', fontsize=16)
-    ax.grid(True, linestyle=':', alpha=0.7); ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left')
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M')); ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+    ax.grid(True, linestyle=':', alpha=0.7) 
+    ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left')
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M')) 
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
     plt.tight_layout(rect=[0, 0, 0.88, 1])
     
