@@ -24,7 +24,7 @@ pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)  
 
 def parse_ra_to_deg(ra_series):
-    """Converte RA no formato 'HH MM.m' OU 'HH MM SS.s' para graus."""
+    """Converts a pandas Series of Right Ascension (RA) strings formatted as 'HH MM.m' or 'HH MM SS.s' into decimal degrees. It extracts hours, minutes, and seconds using regular expressions and performs the necessary mathematical conversions."""
     pattern = r'^(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)(?:\s+(\d{1,2}(?:\.\d+)?))?'
     extracted = ra_series.str.extract(pattern, expand=True)
     hours = pd.to_numeric(extracted[0], errors='coerce').fillna(0)
@@ -34,7 +34,7 @@ def parse_ra_to_deg(ra_series):
     return hours_dec * 15.0
 
 def parse_dec_to_deg(dec_series):
-    """Converte Declinação no formato '±DD MM' OU '±DD MM SS' para graus."""
+    """Converts a pandas Series of Declination (Dec) strings formatted as '±DD MM' or '±DD MM SS' into decimal degrees. It handles positive and negative signs and calculates the absolute decimal value based on degrees, minutes, and seconds."""
     pattern = r'^([+-]?)\s*(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)(?:\s+(\d{1,2}(?:\.\d+)?))?'
     extracted = dec_series.str.extract(pattern, expand=True)
     sign = extracted[0].map({'': 1, '+': 1, '-': -1}).fillna(1).astype(float)
@@ -45,6 +45,7 @@ def parse_dec_to_deg(dec_series):
     return sign * dec_abs
 
 def _get_mpc_url(obj_type):
+    """Returns the appropriate Minor Planet Center (MPC) URL string depending on the given object type. It accepts "NEOCP" (Near-Earth Object Confirmation Page) or "PCCP" (Possible Comet Confirmation Page) and raises an error if an invalid type is provided."""
     obj_type = obj_type.strip().upper()
     if obj_type == "NEOCP":
         return "https://minorplanetcenter.net/iau/NEO/toconfirm_tabular.html"
@@ -54,13 +55,14 @@ def _get_mpc_url(obj_type):
         raise ValueError("obj_type must be 'NEOCP' or 'PCCP'")
 
 def _download_mpc_table(obj_type):
+    """Fetches the HTML content from the corresponding MPC page, locates the data table, removes hidden sorting elements/checkboxes, and parses the table into a cleaned pandas DataFrame with standardized column names and numeric data types."""
     url = _get_mpc_url(obj_type)
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         resp = requests.get(url, headers=headers)
         resp.raise_for_status()
-    except Exception:
-        print("Download error")
+    except Exception as e:
+        print(f"Download error: {e}")
         return None
 
     soup = BeautifulSoup(resp.content, 'html.parser')
@@ -79,8 +81,8 @@ def _download_mpc_table(obj_type):
         if not df_list:
             return None
         df = df_list[0]
-    except Exception:
-        print("Error in read_html")
+    except Exception as e:
+        print(f"Error in read_html: {e}")
         return None
 
     df = df.dropna(axis=1, how='all')
@@ -107,6 +109,7 @@ def _download_mpc_table(obj_type):
     return df.reset_index(drop=True)
 
 def get_observatory_location(obs_code):
+    """Retrieves the geographical coordinates (longitude and latitude) of a specific observatory by fetching its MPC code from the official Minor Planet Center observatory list. Returns the location as an astropy EarthLocation object."""
     url_obs = "https://minorplanetcenter.net/iau/lists/ObsCodes.html"
     try:
         r = requests.get(url_obs)
@@ -129,6 +132,7 @@ def get_observatory_location(obs_code):
     return None
 
 def filter_visible_objects(df, location, altitude_min=10, time_min_minutes=30):
+    """Filters a DataFrame of celestial objects to find those that are visible from a specific EarthLocation. It calculates the altitude of the objects over a 24-hour period (in 15-minute intervals) and returns only the objects that remain above the altitude_min threshold for at least the time_min_minutes duration."""
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -187,6 +191,7 @@ def filter_visible_objects(df, location, altitude_min=10, time_min_minutes=30):
     return df_result
 
 def mpc_objects(obj_type):
+    """A high-level wrapper function that downloads the raw MPC table for a given object type, prints the total number of downloaded objects to the console, and returns the resulting pandas DataFrame."""
     df = _download_mpc_table(obj_type)
     if df is None or df.empty:
         print("No data obtained.")
@@ -195,6 +200,7 @@ def mpc_objects(obj_type):
     return df
 
 def process_mpc_data(obs_code, obj_type, interactive_mode=True):
+    """Downloads the MPC data, filters it for objects visible from the specified observatory code, and prints a formatted table of the visible objects sorted by their maximum altitude. If interactive_mode is True, it starts a loop allowing the user to type an object's designation to view its specific details."""
     df_raw = _download_mpc_table(obj_type)
     if df_raw is None or df_raw.empty:
         return pd.DataFrame()
@@ -228,10 +234,7 @@ def process_mpc_data(obs_code, obj_type, interactive_mode=True):
     return df_filtered
 
 def fetch_mpc_data(obj_type, obs_code):
-    """
-    Obtém a página de efemérides interagindo com o site via Selenium.
-    Baseado no script validado do usuário.
-    """
+    """Uses Selenium WebDriver in headless mode to navigate the MPC website, automatically fills out the ephemeris form (selecting all objects and inputting the provided observatory code), submits it, and scrapes the raw text output of the resulting ephemerides page."""
     # 1. Configura a URL dinamicamente
     if obj_type.strip().upper() == "NEOCP":
         url = "https://minorplanetcenter.net/iau/NEO/toconfirm_tabular.html"
@@ -299,10 +302,7 @@ def fetch_mpc_data(obj_type, obs_code):
         driver.quit()
 
 def parse_mpc_data(page_text):
-    """
-    Lê o texto das efemérides do MPC e separa em um dicionário de DataFrames.
-    Lida com o formato padrão do NEOCP e verifica o asterisco opcional de interferência.
-    """
+    """Parses the raw ephemeris text string obtained from the MPC website. It iterates through the text line by line, identifies individual objects, accounts for optional interference asterisks, and extracts the coordinate and motion data into a dictionary of pandas DataFrames (where keys are the object designations)."""
     if not page_text:
         return {}
         
@@ -359,6 +359,7 @@ def parse_mpc_data(page_text):
     return ephemeris_dict
 
 def analyze_ephemeris_objects(obs_code, obj_type, altitude_min=10, duration_min=30, plot=True):
+    """An orchestration function that executes the full pipeline: it fetches the observatory location, scrapes the ephemeris data using Selenium, parses the text into DataFrames, filters the objects based on visibility criteria (altitude and duration), and returns a dictionary with the results. If plot is True, it also generates and displays a Matplotlib graph showing the altitude curves of the visible objects over the next 24 hours."""
     resultado_padrao = {'visible_objects': pd.DataFrame(), 'altitude_curves': {}, 'times': None}
 
     location = get_observatory_location(obs_code)
