@@ -1,14 +1,51 @@
+"""Parse ephemeris text from MPC confirmation pages into structured data.
+
+This module extracts ephemeris tables from raw MPC page text using position-based
+column parsing with fallback strategies. The parser is designed to handle variations
+in MPC page formatting and returns a dictionary mapping object provisional
+designations to DataFrames containing ephemeris data for each time step.
+
+Key challenges addressed:
+- Column positions may vary between page updates
+- Header rows may be inconsistent or repeated
+- Data rows are identified by leading date patterns (YYYY format)
+- Fallback parsing uses regex word-splitting for robustness
+"""
+
 import re
 
 import pandas as pd
 
 
 def parse_mpc_data(page_text):
-    """
-    Parses ephemeris text using a robust column-position approach with fallback.
-    Returns dict { object_name: DataFrame } with columns:
-        Date, UT, R.A. (J2000), Decl, Elong, V,
-        Object Alt, Sun Alt, Motion min, Motion PA
+    """Parse ephemeris text from an MPC confirmation page.
+
+    Extracts ephemeris tables for each unconfirmed object using column-position
+    parsing (with fallback to regex-based parsing if positions cannot be
+    determined). Each object's ephemeris is stored as a DataFrame with columns:
+    Date, UT, R.A. (J2000), Decl, Elong, V, Object Alt, Sun Alt, Motion min, Motion PA.
+
+    The parser identifies:
+    - Object sections by the marker "Get the observations or orbits."
+    - Header lines containing column names (Date, UT, R.A., etc.)
+    - Data rows starting with a year (e.g., "2026")
+    - Visibility windows by combining Object Alt, Sun Alt, Date, and UT
+
+    Args:
+        page_text: Raw text from MPC page, as returned by fetch_mpc_data().
+
+    Returns:
+        dict: Maps provisional object designation (str) to pandas.DataFrame.
+        Each DataFrame contains one row per ephemeris time step. Returns empty
+        dict if page_text is None, empty, or no objects are found.
+
+    Notes:
+        - Column extraction assumes specific spacing in the MPC page layout.
+        - Fallback parsing splits headers by 2+ whitespaces for robustness.
+        - Data rows with incomplete or malformed fields are included; consumers
+          should validate numeric columns (altitude, time) before use.
+        - Empty or NaN fields in critical columns may cause downstream filtering
+          to skip those rows.
     """
     if not page_text:
         return {}

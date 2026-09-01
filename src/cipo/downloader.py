@@ -1,3 +1,13 @@
+"""Download and parse unconfirmed object data from the Minor Planet Center.
+
+This module provides tools to fetch ephemeris tables from the MPC's NEOCP and
+PCCP pages using Selenium for JavaScript rendering, with optional caching to
+reduce network load and improve performance.
+
+The ephemeris text is returned as raw page content and must be parsed by
+parser.py to extract structured data.
+"""
+
 import io
 import os
 import pickle
@@ -7,6 +17,11 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -24,8 +39,15 @@ from .config import (
 )
 
 
-# Driver manager singleton to avoid multiple instances of ChromeDriver
+# --- ChromeDriver Singleton ---
+
 class MPCDriver:
+    """Singleton manager for ChromeDriver instances.
+
+    Ensures only one browser instance is created and reused across the session,
+    reducing memory overhead and improving performance when multiple downloads
+    are needed. The driver is configured for headless operation.
+    """
     _instance = None
     _driver = None
 
@@ -35,6 +57,11 @@ class MPCDriver:
         return cls._instance
 
     def get_driver(self):
+        """Get or create the ChromeDriver instance.
+
+        Returns:
+            selenium.webdriver.Chrome: Configured WebDriver in headless mode.
+        """
         if self._driver is None:
             chrome_options = Options()
             chrome_options.add_argument("--headless")
@@ -51,15 +78,26 @@ class MPCDriver:
         return self._driver
 
     def quit(self):
+        """Terminate the ChromeDriver instance."""
         if self._driver:
             self._driver.quit()
             self._driver = None
 
-# Downloader functions for MPC data
+
+# --- URL and Data Retrieval Functions ---
 
 def _get_mpc_url(obj_type):
-    """
-    Returns the appropriate MPC URL.
+    """Return the appropriate MPC confirmation page URL.
+
+    Args:
+        obj_type: Either 'NEOCP' (NEO Confirmation Page) or 'PCCP'
+            (Possible Comet Confirmation Page). Case-insensitive.
+
+    Returns:
+        str: Full URL to the MPC confirmation page.
+
+    Raises:
+        ValueError: If obj_type is neither 'NEOCP' nor 'PCCP'.
     """
     obj_type = obj_type.strip().upper()
     if obj_type == "NEOCP":
@@ -69,19 +107,33 @@ def _get_mpc_url(obj_type):
     else:
         raise ValueError("obj_type must be 'NEOCP' or 'PCCP'")
 
+
 def _download_mpc_table(obj_type):
-    """
-    Downloads the preview table (HTML) and returns a cleaned DataFrame.
+    """Download the preview summary table from an MPC confirmation page.
+
+    Fetches the HTML table of unconfirmed objects from the specified MPC page,
+    cleans hidden elements and checkboxes, and returns a parsed DataFrame.
+
+    Args:
+        obj_type: Either 'NEOCP' or 'PCCP'.
+
+    Returns:
+        pandas.DataFrame with columns: 'Temp Desig', 'Score', 'Discovery',
+        'R.A.', 'Decl.', 'V', 'Updated', 'Note', 'NObs', 'Arc', 'H',
+        'Not_Seen_dys'; or None if download/parsing fails.
+
+    Side effects:
+        Prints error messages to stdout on failure.
     """
     url = _get_mpc_url(obj_type)
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUESTS_TIMEOUT)
         resp.raise_for_status()
-    except Exception as e:
+    except (requests.RequestException, requests.Timeout) as e:
         print(f"Download error: {e}")
         return None
 
-    soup = BeautifulSoup(resp.content, 'lxml')  # mais rápido que 'html.parser'
+    soup = BeautifulSoup(resp.content, 'lxml')  # faster than 'html.parser'
     table = soup.find('table', {'class': 'tablesorter'})
     if not table:
         print("Table not found on the page.")
@@ -98,7 +150,7 @@ def _download_mpc_table(obj_type):
         if not df_list:
             return None
         df = df_list[0]
-    except Exception as e:
+    except (ValueError, TypeError, KeyError) as e:
         print(f"Error in read_html: {e}")
         return None
 
@@ -125,9 +177,27 @@ def _download_mpc_table(obj_type):
 
     return df.reset_index(drop=True)
 
+
 def fetch_mpc_data(obj_type, obs_code, use_cache=USE_CACHE):
-    """
-    Fetches ephemeris text via Selenium (with optional caching).
+    """Fetch full ephemeris text for all objects at a specified observatory.
+
+    Uses Selenium to navigate the MPC page, select 'All objects', enter the
+    observatory code, and submit the form. Results are cached locally to
+    reduce network traffic. Cached data is retrieved by object type and
+    observatory code.
+
+    Args:
+        obj_type: Either 'NEOCP' or 'PCCP'.
+        obs_code: Three-character MPC observatory code (e.g., 'Y28' for OASI).
+        use_cache: If True (default), cache results to disk and reuse if available.
+
+    Returns:
+        str: Full page text containing ephemeris tables; None if request fails
+        or no ephemeris data is available for the observatory.
+
+    Side effects:
+        Launches and controls a Chrome browser (headless). Creates cache directory
+        if it does not exist. Prints status and error messages to stdout.
     """
     # Create cache directory if it doesn't exist
     if use_cache:
@@ -189,6 +259,6 @@ def fetch_mpc_data(obj_type, obs_code, use_cache=USE_CACHE):
 
         return text
 
-    except Exception as e:
+    except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
         print(f"Selenium error: {e}")
         return None

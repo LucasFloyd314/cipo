@@ -1,3 +1,19 @@
+"""High-level workflows for retrieving and analyzing MPC ephemerides.
+
+The public functions in this module coordinate the full package pipeline:
+download data for an MPC object type and observatory code, parse the
+ephemeris tables, calculate visibility windows, and present the resulting
+summary. The MPC values are interpreted in UTC; altitude thresholds are in
+degrees and duration thresholds are in minutes.
+
+Supported workflows:
+1. analyze_ephemeris_objects: Fetch, analyze, and plot in one call
+2. process_mpc_data: Analyze with optional interactive object inspection
+
+All functions use configuration defaults from config.py but accept override
+parameters for flexibility.
+"""
+
 from datetime import timedelta
 
 import matplotlib.pyplot as plt
@@ -25,9 +41,34 @@ def analyze_ephemeris_objects(
     duration_min=DEFAULT_DUR_MIN,
     plot=True
 ):
-    """
-    Master function: fetch, parse, filter, print summary, and optionally plot.
-    All parameters are optional; defaults are taken from config.py.
+    """Retrieve, analyze, and optionally plot MPC ephemeris data.
+
+    The function requests the selected MPC confirmation page, parses its
+    ephemeris sections, and keeps objects with at least ``duration_min``
+    minutes at or above ``altitude_min`` degrees while the Sun is below the
+    package's twilight limit. Results are sorted by descending maximum
+    altitude. When ``plot`` is true, a Matplotlib chart is displayed for the
+    configured observing interval (defined in UTC).
+
+    Args:
+        obs_code: Three-character MPC observatory code used for the request.
+        obj_type: MPC page/object category accepted by ``fetch_mpc_data``.
+        altitude_min: Minimum object altitude in degrees.
+        duration_min: Minimum visibility duration in minutes.
+        plot: Display altitude curves for the selected objects when true.
+
+    Returns:
+        A pandas DataFrame with one row per selected object and these columns:
+        ``Temp Desig`` (the provisional MPC identifier), ``R.A.`` and
+        ``Decl.`` (J2000 coordinates), ``V`` (visual magnitude),
+        ``Visible_Minutes``, ``Max_Alt`` (degrees), and
+        ``Max_Alt_Time_UTC``. An empty DataFrame is returned when the
+        request, parsing, or visibility criteria produce no results.
+
+    Side effects:
+        Performs a network request, prints status/results to stdout, and may
+        open a Matplotlib window. Network or malformed-data errors are
+        handled by the lower-level downloader/parser functions.
     """
     text = fetch_mpc_data(obj_type, obs_code)
     if not text:
@@ -136,8 +177,36 @@ def process_mpc_data(
     obj_type=DEFAULT_OBJ_TYPE,
     interactive_mode=True
 ):
-    """
-    Simplified wrapper (no plot) with optional interactive mode.
+    """Run visibility analysis without plotting and optionally inspect objects interactively.
+
+    This convenience wrapper uses DEFAULT_ALT_MIN and DEFAULT_DUR_MIN from config,
+    retrieves visible objects, and optionally starts a console prompt where a user
+    can enter a value from the returned 'Temp Desig' column to view that object's
+    detailed row. Enter '0' (zero) to exit the interactive prompt.
+
+    This is useful for quick analysis workflows where you want to:
+    1. Retrieve all visible objects for today
+    2. Inspect individual objects without plotting
+    3. Get detailed ephemeris data for planning
+
+    Args:
+        obs_code: Three-character MPC observatory code (default from config).
+        obj_type: 'NEOCP' or 'PCCP' (default from config).
+        interactive_mode: If True (default), enter console prompt to inspect objects
+            by their 'Temp Desig' identifier. If False, return results silently.
+
+    Returns:
+        pandas.DataFrame with visible objects (same as analyze_ephemeris_objects),
+        or empty DataFrame if no objects satisfy default criteria.
+
+    Side effects:
+        Performs network request and prints status/results. When interactive_mode
+        is True, reads object identifiers from stdin and displays matching rows.
+
+    Example:
+        >>> df = process_mpc_data(obs_code='Y28')
+        >>> # When prompted, enter an object name like 'K26A02' to see its details
+        >>> # Enter '0' to exit
     """
     df_visible = analyze_ephemeris_objects(
         obs_code, obj_type,
@@ -161,67 +230,3 @@ def process_mpc_data(
                 print(f"Object '{target}' not found in the visible list.")
 
     return df_visible
-# Functions below are commented out to avoid polluting the namespace,
-
-
-# def parse_ra_to_deg(ra_series):
-#     pattern = r'^(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)(?:\s+(\d{1,2}(?:\.\d+)?))?'
-#     extracted = ra_series.str.extract(pattern, expand=True)
-#     hours = pd.to_numeric(extracted[0], errors='coerce').fillna(0)
-#     minutes = pd.to_numeric(extracted[1], errors='coerce').fillna(0)
-#     seconds = pd.to_numeric(extracted[2], errors='coerce').fillna(0)
-#     hours_dec = hours + (minutes / 60) + (seconds / 3600)
-#     return hours_dec * 15.0
-
-# def parse_dec_to_deg(dec_series):
-#     pattern = r'^([+-]?)\s*(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)(?:\s+(\d{1,2}(?:\.\d+)?))?'
-#     extracted = dec_series.str.extract(pattern, expand=True)
-#     sign = extracted[0].map({'': 1, '+': 1, '-': -1}).fillna(1).astype(float)
-#     degrees = pd.to_numeric(extracted[1], errors='coerce').fillna(0)
-#     minutes = pd.to_numeric(extracted[2], errors='coerce').fillna(0)
-#     seconds = pd.to_numeric(extracted[3], errors='coerce').fillna(0)
-#     dec_abs = degrees + (minutes / 60) + (seconds / 3600)
-#     return sign * dec_abs
-
-# def get_observatory_location(obs_code):
-#     import requests
-#     from astropy.coordinates import EarthLocation
-#     import astropy.units as u
-#     url_obs = "https://minorplanetcenter.net/iau/lists/ObsCodes.html"
-#     try:
-#         r = requests.get(url_obs, timeout=15)
-#         r.raise_for_status()
-#     except Exception:
-#         print("Error accessing observatory list")
-#         return None
-#     for line in r.text.split('\n'):
-#         if line.startswith(obs_code):
-#             parts = line.split()
-#             if len(parts) >= 4:
-#                 long_deg = float(parts[1])
-#                 cos_phi = float(parts[2])
-#                 sin_phi = float(parts[3])
-#                 lat_rad = np.arctan2(sin_phi, cos_phi)
-#                 lat_deg = np.degrees(lat_rad)
-#                 return EarthLocation(lat=lat_deg * u.deg, lon=long_deg * u.deg, height=0 * u.m)
-#     print(f"Code {obs_code} not found.")
-#     return None
-
-# def mpc_objects(obj_type):
-#     df = _download_mpc_table(obj_type)
-#     if df is None or df.empty:
-#         print("No data obtained.")
-#         return None
-#     print(f"Downloaded {len(df)} objects from page {obj_type.upper()}.")
-#     return df
-
-# Para manter compatibilidade com importações antigas, exponha funções principais
-#__all__ = [
-#    '_download_mpc_table',
-#    '_get_mpc_url',  # noqa: F822
-#    'analyze_ephemeris_objects',
-#    'fetch_mpc_data',
-#    'filter_visible_objects',
-#    'parse_mpc_data',
-#    'process_mpc_data'
-#]

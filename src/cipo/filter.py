@@ -2,20 +2,35 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .config import SUN_ALT_LIMIT
+from .config import DEFAULT_ALT_MIN, DEFAULT_DUR_MIN, SUN_ALT_LIMIT
 
 
 def filter_visible_objects(ephem_dict, altitude_min=None, time_min_minutes=None):
     """
-    Filter visible objects.
-    If altitude_min or time_min_minutes are not provided, use the values from config.
+    Filter visible objects by altitude and duration criteria.
+
+    Identifies visibility windows (gaps > 2 hours separate windows) and selects
+    objects with at least ``time_min_minutes`` duration at or above
+    ``altitude_min`` degrees during astronomical night (Sun below -18°).
+
+    Args:
+        ephem_dict: Dictionary mapping object names to pandas DataFrames with
+            ephemeris data. Each DataFrame must contain:
+            'Date', 'UT', 'Object Alt', 'Sun Alt', 'R.A. (J2000)', 'Decl', 'V'.
+        altitude_min: Minimum object altitude in degrees. If None, uses
+            DEFAULT_ALT_MIN from config.
+        time_min_minutes: Minimum continuous visibility duration in minutes.
+            If None, uses DEFAULT_DUR_MIN from config.
+
+    Returns:
+        pandas.DataFrame with one row per visible object and columns:
+        'Temp Desig', 'R.A.', 'Decl.', 'V', 'Visible_Minutes', 'Max_Alt',
+        'Max_Alt_Time_UTC'. Empty DataFrame if no objects meet criteria.
     """
     if altitude_min is None:
-        from config import ALTITUDE_MIN
-        altitude_min = ALTITUDE_MIN
+        altitude_min = DEFAULT_ALT_MIN
     if time_min_minutes is None:
-        from config import DURATION_MIN
-        time_min_minutes = DURATION_MIN
+        time_min_minutes = DEFAULT_DUR_MIN
 
     if not ephem_dict:
         return pd.DataFrame()

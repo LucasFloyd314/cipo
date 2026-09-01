@@ -1,14 +1,16 @@
 [project]
 name = "cipo"
 version = "0.1.0"
-description = "Add your description here"
+description = "Retrieving and analyzing unconfirmed objects from Minor Planet Center"
 readme = "README.md"
-authors = [
-    { email = "lucascorreasouza@id.uff.br" }
+authors = [ 
+    { name = "Lucas Correa de Souza", email = "lucascorreasouza@id.uff.br" },
+    { name = "Mario De Pra", email = "depra@on.br" }
 ]
 requires-python = ">=3.13"
 dependencies = [
     "astropy>=7.2.0",
+    "beautifulsoup4>=4.12.0",
     "html5lib>=1.1",
     "lxml>=6.0.2",
     "matplotlib>=3.10.3",
@@ -19,14 +21,12 @@ dependencies = [
     "webdriver-manager>=4.0.2",
 ]
 
-[project.scripts]
-cipo = "cipo:main"
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.1.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.0,<0.9"]
 build-backend = "uv_build"
 
-[dependency-groups]
-dev = [
-    "jupyter>=1.1.1",
-]
