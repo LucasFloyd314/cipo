@@ -42,6 +42,23 @@
 
 ## Quick Start
 
+See [FUNCTION_INDEX.md](FUNCTION_INDEX.md) for an alphabetized index of package
+functions and methods, including internal helpers.
+
+### Notebooks
+
+The runnable notebooks in `notebooks/` are documented in English:
+
+- `ranked_observable_objects.ipynb`: fetches and ranks candidates by visibility,
+  magnitude, altitude, and duration.
+- `observation_application.ipynb`: demonstrates the basic current-date workflow.
+- `final_observatory_workflow.ipynb`: shows MPC acquisition, parsing, visibility
+  filtering, and observing-window calculations.
+- `visibility_analysis.ipynb` and `visibility_test.ipynb`: demonstrate analysis
+  plots and site-specific observation windows.
+- `mpc_candidate_exploration.ipynb` and `ephemeris_analysis.ipynb`: concise
+  examples of the public CIPO APIs.
+
 ### Basic Usage: Analyze Visible Objects
 
 ```python
@@ -57,6 +74,36 @@ df = analyze_ephemeris_objects(
 )
 
 print(df[['Temp Desig', 'R.A.', 'Decl.', 'Max_Alt', 'Visible_Minutes']])
+```
+
+For a ranked candidate list, `get_prioritized_observable_objects` performs the
+visibility analysis, magnitude/altitude filtering, and sorting in one call. It
+uses today's UTC date by default and ranks higher altitude first, then brighter
+magnitude, then longer visibility:
+
+```python
+from cipo import get_prioritized_observable_objects
+
+ranked = get_prioritized_observable_objects(
+    obs_code='Y28',
+    obj_type='NEOCP',
+    magnitude_max=18,
+    altitude_min=10,
+    duration_min=30,
+)
+print(ranked)
+```
+
+`process_mpc_data` analyzes today's UTC date by default. Rows from other dates
+are not substituted if the MPC has no ephemeris for that day. Pass
+`reference_date` only when you need to analyze another date:
+
+```python
+from cipo import process_mpc_data
+
+objects = process_mpc_data(
+    interactive_mode=False,
+)
 ```
 
 ### Interactive Mode
@@ -87,8 +134,18 @@ windows = calculate_observation_windows(
 )
 
 for start, new_moon, end in windows:
-    print(f"Window: {start} to {end} (New Moon: {new_moon})")
+    print(
+        f"Window: {start:%Y/%m/%d} to {end:%Y/%m/%d} "
+        f"(New Moon: {new_moon:%Y/%m/%d})"
+    )
 ```
+
+### Date and time formatting
+
+Dates shown in CIPO's observation-window labels and plot axes use
+`YYYY/MM/DD` (year/month/day). MPC ephemeris input keeps the source format
+`YYYY MM DD`, and APIs continue to return date or timestamp objects rather than
+formatted strings where applicable. Ephemeris and plot times are UTC.
 
 ## Configuration
 
@@ -134,7 +191,10 @@ Central configuration for observatory, observation criteria, and plotting parame
 ### `main.py`
 High-level workflows:
 - `analyze_ephemeris_objects()`: Fetch, parse, filter, and plot ephemeris data
-- `process_mpc_data()`: Non-plotting analysis with optional interactive mode
+- `get_prioritized_observable_objects()`: Fetch, filter, and rank observable
+  candidates by altitude, magnitude, and visible duration
+- `process_mpc_data()`: Visibility analysis with optional date filtering,
+  plotting, and interactive inspection
 
 ### `visibility.py`
 - `calculate_observation_windows()`: Identify New Moon observation windows for given location and year range

@@ -18,9 +18,11 @@ import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import (
+    InvalidSessionIdException,
     NoSuchElementException,
     StaleElementReferenceException,
     TimeoutException,
+    WebDriverException,
 )
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -38,7 +40,6 @@ from .config import (
     USE_CACHE,
 )
 
-
 # --- ChromeDriver Singleton ---
 
 class MPCDriver:
@@ -52,6 +53,7 @@ class MPCDriver:
     _driver = None
 
     def __new__(cls):
+        """Create the singleton driver manager on its first instantiation."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -62,6 +64,12 @@ class MPCDriver:
         Returns:
             selenium.webdriver.Chrome: Configured WebDriver in headless mode.
         """
+        if self._driver is not None:
+            try:
+                self._driver.current_url
+            except WebDriverException:
+                self.quit()
+
         if self._driver is None:
             chrome_options = Options()
             chrome_options.add_argument("--headless")
@@ -79,12 +87,23 @@ class MPCDriver:
 
     def quit(self):
         """Terminate the ChromeDriver instance."""
-        if self._driver:
-            self._driver.quit()
-            self._driver = None
+        driver, self._driver = self._driver, None
+        if driver:
+            try:
+                driver.quit()
+            except WebDriverException:
+                pass
 
 
 # --- URL and Data Retrieval Functions ---
+
+def _normalize_obj_type(obj_type):
+    """Return a validated uppercase MPC confirmation page identifier."""
+    normalized = str(obj_type).strip().upper()
+    if normalized not in {"NEOCP", "PCCP"}:
+        raise ValueError("obj_type must be 'NEOCP' or 'PCCP'")
+    return normalized
+
 
 def _get_mpc_url(obj_type):
     """Return the appropriate MPC confirmation page URL.
@@ -99,13 +118,10 @@ def _get_mpc_url(obj_type):
     Raises:
         ValueError: If obj_type is neither 'NEOCP' nor 'PCCP'.
     """
-    obj_type = obj_type.strip().upper()
+    obj_type = _normalize_obj_type(obj_type)
     if obj_type == "NEOCP":
         return "https://minorplanetcenter.net/iau/NEO/toconfirm_tabular.html"
-    elif obj_type == "PCCP":
-        return "https://minorplanetcenter.net/iau/NEO/pccp_tabular.html"
-    else:
-        raise ValueError("obj_type must be 'NEOCP' or 'PCCP'")
+    return "https://minorplanetcenter.net/iau/NEO/pccp_tabular.html"
 
 
 def _download_mpc_table(obj_type):
@@ -178,11 +194,28 @@ def _download_mpc_table(obj_type):
     return df.reset_index(drop=True)
 
 
+def _validate_observatory_ephemeris(text, obs_code):
+    """Reject MPC responses that are not specific to the requested observatory."""
+    normalized_text = text.casefold()
+    if "code is not in use" in normalized_text:
+        raise ValueError(
+            f"MPC rejected observatory code {obs_code!r}. "
+            "Use an active MPC code; OASI's registered code is Y28."
+        )
+    if "ephemerides are for the geocenter" in normalized_text:
+        raise ValueError(
+            f"MPC returned geocentric ephemerides for {obs_code!r}, "
+            "not ephemerides for the observatory. Check the MPC response."
+        )
+
+
 def fetch_mpc_data(obj_type, obs_code, use_cache=USE_CACHE):
     """Fetch full ephemeris text for all objects at a specified observatory.
 
-    Uses Selenium to navigate the MPC page, select 'All objects', enter the
-    observatory code, and submit the form. Results are cached locally to
+    Uses Selenium to navigate the MPC page, select every object checkbox from
+    that specific confirmation page, enter the observatory code, and submit the
+    form. This avoids the shared CGI endpoint defaulting to NEOCP for an 'All
+    objects' submission. Results are cached locally to
     reduce network traffic. Cached data is retrieved by object type and
     observatory code.
 
@@ -198,67 +231,114 @@ def fetch_mpc_data(obj_type, obs_code, use_cache=USE_CACHE):
     Side effects:
         Launches and controls a Chrome browser (headless). Creates cache directory
         if it does not exist. Prints status and error messages to stdout.
+
+    Raises:
+        ValueError: If the MPC rejects the observatory code or returns
+            geocentric rather than observatory-specific ephemerides.
     """
+    obs_code = obs_code.strip().upper()
+    obj_type = _normalize_obj_type(obj_type)
+
     # Create cache directory if it doesn't exist
     if use_cache:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        cache_file = os.path.join(CACHE_DIR, f"ephem_{obj_type}_{obs_code}.pkl")
+        cache_file = os.path.join(CACHE_DIR, f"ephem_v2_{obj_type}_{obs_code}.pkl")
         if os.path.exists(cache_file):
             with open(cache_file, 'rb') as f:
+                cached_text = pickle.load(f)
+                _validate_observatory_ephemeris(cached_text, obs_code)
                 print(f"Loaded cached ephemeris for {obj_type} (obs {obs_code})")
-                return pickle.load(f)
+                return cached_text
 
     url = _get_mpc_url(obj_type)
     print(f"Fetching ephemeris via Selenium for {obj_type.upper()} (obs: {obs_code})...")
 
-    driver = MPCDriver().get_driver()
-    try:
-        driver.get(url)
+    driver_manager = MPCDriver()
+    for attempt in range(2):
+        driver = driver_manager.get_driver()
+        try:
+            driver.get(url)
 
-        # Select "All objects"
-        radio = WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='radio' and @name='W' and @value='a']"))
-        )
-        driver.execute_script("arguments[0].scrollIntoView(true);", radio)
-        time.sleep(0.5)
-        driver.execute_script("arguments[0].click();", radio)
+            # Scope every interaction to the ephemeris form.  Both confirmation
+            # pages also contain a search form whose submit element is matched by
+            # a generic input[type='submit'] XPath.
+            ephemeris_form = "//input[@name='obscode']/ancestor::form[1]"
 
-        # Insert the observatory code
-        obs_input = WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@name='obscode']"))
-        )
-        obs_input.clear()
-        obs_input.send_keys(obs_code)
+            radio = WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    f"{ephemeris_form}//input[@type='radio' and @name='W' and @value='j']",
+                ))
+            )
+            driver.execute_script("arguments[0].scrollIntoView(true);", radio)
+            time.sleep(0.5)
+            driver.execute_script("arguments[0].click();", radio)
 
-        # Submit the form
-        submit = WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
-            EC.element_to_be_clickable((By.XPATH, "//input[@type='submit']"))
-        )
-        driver.execute_script("arguments[0].click();", submit)
+            # Selecting the objects explicitly is required because 'All objects'
+            # is not page-specific at the shared confirmation CGI endpoint.
+            object_checkboxes = driver.find_elements(
+                By.XPATH,
+                f"{ephemeris_form}//input[@type='checkbox' and @name='obj']",
+            )
+            try:
+                object_checkboxes = list(object_checkboxes)
+            except TypeError:
+                object_checkboxes = []
+            for checkbox in object_checkboxes:
+                if not checkbox.is_selected():
+                    driver.execute_script("arguments[0].click();", checkbox)
 
-        # Wait for the page to load and check for specific text indicating no results
-        WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
-            lambda d: "No observers have reported" in d.page_source or 
-                      "Date" in d.page_source or 
-                      "No results found" in d.page_source
-        )
-        time.sleep(1)  # small delay to ensure the page is fully loaded
+            obs_input = WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    f"{ephemeris_form}//input[@name='obscode']",
+                ))
+            )
+            obs_input.clear()
+            obs_input.send_keys(obs_code)
 
-        if "No observers have reported" in driver.page_source or "No results found" in driver.page_source:
-            print("No ephemeris available for today.")
+            submit = WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    f"{ephemeris_form}//input[@type='submit' and contains(normalize-space(@value), 'Get ephemerides')]",
+                ))
+            )
+            driver.execute_script("arguments[0].click();", submit)
+
+            WebDriverWait(driver, SELENIUM_PAGE_LOAD_WAIT).until(
+                lambda current_driver: (
+                    "No observers have reported" in current_driver.page_source
+                    or "Date" in current_driver.page_source
+                    or "No results found" in current_driver.page_source
+                )
+            )
+            time.sleep(1)
+
+            if (
+                "No observers have reported" in driver.page_source
+                or "No results found" in driver.page_source
+            ):
+                print("No ephemeris available for today.")
+                return None
+
+            text = driver.find_element(By.TAG_NAME, "body").text
+            _validate_observatory_ephemeris(text, obs_code)
+
+            if use_cache and text:
+                with open(cache_file, 'wb') as f:
+                    pickle.dump(text, f)
+                print(f"Cached ephemeris to {cache_file}")
+
+            return text
+
+        except InvalidSessionIdException as e:
+            driver_manager.quit()
+            if attempt == 1:
+                print(f"Selenium session error after retry: {e}")
+                return None
+            print("Selenium session expired; retrying with a new browser session.")
+        except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
+            print(f"Selenium error: {e}")
             return None
 
-        body = driver.find_element(By.TAG_NAME, "body")
-        text = body.text
-
-        # Save in cache
-        if use_cache and text:
-            with open(cache_file, 'wb') as f:
-                pickle.dump(text, f)
-            print(f"Cached ephemeris to {cache_file}")
-
-        return text
-
-    except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
-        print(f"Selenium error: {e}")
-        return None
+    return None

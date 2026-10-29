@@ -1,30 +1,10 @@
 """CIPO - Confirming Interplanetary Object Observatory.
 
-A Python package for retrieving, parsing, and analyzing unconfirmed object
-data from the Minor Planet Center's NEO Confirmation Page (NEOCP) and Possible
-Comet Confirmation Page (PCCP), with support for visibility calculation and
-scheduling for a given observatory.
-
-Key modules:
-- config: Configuration parameters (observatory code, altitude limits, etc.)
-- downloader: Fetch ephemeris data from MPC pages using Selenium
-- parser: Parse ephemeris tables into structured DataFrames
-- filter: Filter objects by altitude and visibility duration criteria
-- visibility: Calculate observation windows based on lunar phases
-- main: High-level workflows (analyze_ephemeris_objects, process_mpc_data)
-- graphics: Visualization and plotting utilities (advanced)
-
-Example usage:
-    from cipo import analyze_ephemeris_objects
-    
-    df = analyze_ephemeris_objects(
-        obs_code='Y28',
-        obj_type='NEOCP',
-        altitude_min=10,
-        duration_min=30,
-        plot=True
-    )
-    print(df[['Temp Desig', 'R.A.', 'Decl.', 'Max_Alt']])
+The package retrieves and parses provisional ephemerides from the MPC,
+filters objects by site visibility, and helps rank observing opportunities
+for candidate NEO/PCCP targets. The default behavior is intentionally
+conservative: provisional ephemerides are treated as visibility candidates,
+not as a final orbit product.
 """
 
 from .config import *  # noqa: F401, F403
@@ -32,21 +12,34 @@ from .downloader import *  # noqa: F401, F403
 from .filter import *  # noqa: F401, F403
 from .main import *  # noqa: F401, F403
 from .parser import *  # noqa: F401, F403
-from .visibility import calculate_observation_windows  # noqa: F401
+from .graphics import get_object_ephemeris, plot_object_altitude, plot_visibility_from_mpc  # noqa: F401
+from .visibility import (  # noqa: F401
+    calculate_observation_windows,
+    calculate_oasi_observation_windows,
+    calculate_site_observation_windows,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Lucas Correa de Souza, Mario De Pra"
 
 __all__ = [
     "analyze_ephemeris_objects",
+    "get_prioritized_observable_objects",
     "process_mpc_data",
+    "get_mpc_ephemeris_max_date_for_observatory",
+    "oasi_observation_windows",
+    "get_oasi_observation_windows",
     "fetch_mpc_data",
+    "get_object_ephemeris",
+    "plot_object_altitude",
+    "plot_visibility_from_mpc",
     "parse_mpc_data",
     "filter_visible_objects",
     "calculate_observation_windows",
+    "calculate_oasi_observation_windows",
+    "calculate_site_observation_windows",
     "DEFAULT_OBS_CODE",
     "DEFAULT_OBJ_TYPE",
     "DEFAULT_ALT_MIN",
     "DEFAULT_DUR_MIN",
 ]
-
